@@ -24,12 +24,12 @@
       <div class="bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-2xl max-h-[90vh] flex flex-col">
         <h2 class="text-2xl font-bold mb-4 text-indigo-400">Processing Video...</h2>
         <p class="text-gray-300 mb-2">Please wait, this may take a few moments. Do not close this window.</p>
-        <div class="w-full bg-gray-700 rounded-full h-4 mb-4 overflow-hidden">
+        <div id="progress-container" class="w-full bg-gray-700 rounded-full h-4 mb-4 overflow-hidden">
           <div id="progress-bar" class="bg-indigo-600 h-4 rounded-full transition-all duration-300 ease-linear" style="width: 0%;"></div>
         </div>
         <p id="progress-text" class="text-right text-lg font-mono text-indigo-300 mb-4">0%</p>
         <div class="flex-grow bg-black rounded-md p-4 overflow-y-auto border border-gray-700">
-          <h3 class="text-sm font-semibold text-gray-400 mb-2">FFmpeg Logs:</h3>
+          <h3 class="text-sm font-semibold text-gray-400 mb-2">Logs:</h3>
           <div id="logs-container" class="font-mono text-xs text-green-400 whitespace-pre-wrap"></div>
         </div>
       </div>
@@ -74,8 +74,15 @@
         </div>
         
         <!-- Options -->
-        <div id="options-container" class="hidden p-6 bg-gray-800/50 rounded-lg border border-gray-700 space-y-4">
+        <div id="options-container" class="hidden p-6 bg-gray-800/50 rounded-lg border border-gray-700 space-y-6">
           <h2 class="text-xl font-semibold text-gray-200">2. Set Options</h2>
+          <div>
+            <label for="tool-select" class="block text-sm font-medium text-gray-300 mb-2">Processing Tool</label>
+            <select id="tool-select" class="w-full bg-gray-700 text-white rounded-md p-2 border border-gray-600 focus:ring-indigo-500 focus:border-indigo-500">
+              <option value="ffmpeg" selected>FFmpeg (Recommended)</option>
+              <option value="web-api">Web API (Experimental, MP4 Only)</option>
+            </select>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <label class="block text-sm font-medium text-gray-300 mb-2">Segment Length</label>
@@ -88,8 +95,8 @@
             </div>
             <div class="flex items-center justify-start md:mt-8">
                <div class="flex items-center">
-                <input id="audio-only" type="checkbox" class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 bg-gray-700">
-                <label for="audio-only" class="ml-3 block text-sm font-medium text-gray-300">
+                <input id="audio-only" type="checkbox" class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                <label for="audio-only" class="ml-3 block text-sm font-medium text-gray-300 transition-colors">
                   Export Audio Only (.mp3)
                 </label>
               </div>
@@ -117,12 +124,13 @@
         </div>
       </main>
       <footer class="text-center mt-12 text-gray-500 text-sm">
-          <p>Powered by ffmpeg.wasm. All processing is done on your device.</p>
+          <p>Powered by ffmpeg.wasm & mp4box.js. All processing is done on your device.</p>
       </footer>
     </div>
   </div>
 
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
   <script>
     const { createFFmpeg } = FFmpeg;
     let ffmpegInstance = null;
@@ -142,12 +150,14 @@
     const resultsGrid = document.getElementById('results-grid');
     const clearResultsBtn = document.getElementById('clear-results-btn');
     const processingModal = document.getElementById('processing-modal');
+    const progressContainer = document.getElementById('progress-container');
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
     const logsContainer = document.getElementById('logs-container');
     const segmentMinutesInput = document.getElementById('segment-minutes');
     const segmentSecondsInput = document.getElementById('segment-seconds');
     const audioOnlyCheckbox = document.getElementById('audio-only');
+    const toolSelect = document.getElementById('tool-select');
 
     // --- State ---
     let videoFile = null;
@@ -187,11 +197,12 @@
       const segmentMinutes = parseInt(segmentMinutesInput.value || '0', 10);
       const segmentSeconds = parseInt(segmentSecondsInput.value || '0', 10);
       const isDurationValid = segmentMinutes > 0 || segmentSeconds > 0;
+      const isReadyToProcess = videoFile && !isProcessing && isDurationValid && (toolSelect.value === 'web-api' || isFFmpegLoaded);
 
-      processBtn.disabled = !videoFile || isProcessing || !isFFmpegLoaded || !isDurationValid;
+      processBtn.disabled = !isReadyToProcess;
       if (isProcessing) {
         processBtn.textContent = 'Processing...';
-      } else if (!isFFmpegLoaded) {
+      } else if (!isFFmpegLoaded && toolSelect.value === 'ffmpeg') {
         processBtn.textContent = 'Loading Engine...';
       } else {
         processBtn.textContent = 'Process and Split Video';
@@ -254,115 +265,199 @@
       updateUI();
     };
 
-    // --- FFmpeg Logic ---
+    // --- Processing Logic ---
     const loadFFmpeg = async () => {
-      ffmpegInstance = createFFmpeg({
-        log: false, // We will handle logs manually
-        corePath: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-      });
-      await ffmpegInstance.load();
-      isFFmpegLoaded = true;
+      try {
+        ffmpegInstance = createFFmpeg({
+          log: false, // We will handle logs manually
+          corePath: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+        });
+        await ffmpegInstance.load();
+        isFFmpegLoaded = true;
+      } catch (e) {
+        console.error("Failed to load FFmpeg", e);
+      }
       updateUI();
     };
 
-    const handleProcessVideo = async () => {
-      if (!videoFile || !ffmpegInstance) return;
+    const processWithFFmpeg = async () => {
+        if (!videoFile || !ffmpegInstance) return;
 
-      const segmentDuration = parseInt(segmentMinutesInput.value || '0') * 60 + parseInt(segmentSecondsInput.value || '0');
-      if (segmentDuration <= 0) {
-        alert("Segment duration must be greater than 0 seconds.");
-        return;
-      }
+        const segmentDuration = parseInt(segmentMinutesInput.value || '0') * 60 + parseInt(segmentSecondsInput.value || '0');
 
-      isProcessing = true;
-      updateUI();
-
-      // Show modal and reset state
-      processingModal.classList.remove('hidden');
-      progressBar.style.width = '0%';
-      progressText.textContent = '0%';
-      logsContainer.innerHTML = '';
-      outputFiles = [];
-      
-      const addLog = (message) => {
-        logsContainer.innerHTML += `<p class="break-words">> ${message}</p>`;
-        logsContainer.scrollTop = logsContainer.scrollHeight;
-      };
-
-      ffmpegInstance.setLogger(({ message }) => addLog(message));
-      ffmpegInstance.setProgress(({ ratio }) => {
-        const progress = Math.max(0, ratio * 100);
-        progressBar.style.width = `${progress}%`;
-        progressText.textContent = `${progress.toFixed(0)}%`;
-      });
-      
-      try {
-        const { name } = videoFile;
-        const extension = name.split('.').pop() || 'mp4';
-        const isAudio = audioOnlyCheckbox.checked;
-        const outputExtension = isAudio ? 'mp3' : extension;
-
-        addLog('Writing file to memory...');
-        ffmpegInstance.FS('writeFile', name, new Uint8Array(await videoFile.arrayBuffer()));
-        addLog('File written successfully.');
-
-        const args = [
-          '-i', name,
-          '-segment_time', String(segmentDuration),
-          '-f', 'segment',
-          '-reset_timestamps', '1'
-        ];
-
-        if (isAudio) {
-            args.push('-vn', '-c:a', 'libmp3lame', '-q:a', '2');
-        } else {
-            args.push('-c', 'copy', '-map', '0');
-        }
-        args.push(`output%03d.${outputExtension}`);
-
-        addLog(`Running FFmpeg with command: ffmpeg ${args.join(' ')}`);
-        await ffmpegInstance.run(...args);
-        addLog('Processing complete.');
-
-        const generatedFiles = [];
-        const files = ffmpegInstance.FS('readdir', '/');
-        const segmentFiles = files.filter(f => f.startsWith('output') && f.endsWith(outputExtension));
-        
-        addLog(`Found ${segmentFiles.length} output files.`);
-
-        for (const filename of segmentFiles) {
-          const data = ffmpegInstance.FS('readFile', filename);
-          const url = URL.createObjectURL(new Blob([data.buffer], { type: isAudio ? 'audio/mpeg' : videoFile.type }));
-          const friendlyName = filename.replace('output', 'segment_').replace(/(\d{3})/, match => `${parseInt(match, 10)}`);
-          generatedFiles.push({ name: friendlyName, url, type: isAudio ? 'audio' : 'video' });
-        }
-        outputFiles = generatedFiles;
-
-      } catch (error) {
-        addLog(`An error occurred: ${error}`);
-        console.error(error);
-      } finally {
-        isProcessing = false;
-        processingModal.classList.add('hidden');
+        isProcessing = true;
         updateUI();
-      }
+
+        processingModal.classList.remove('hidden');
+        progressContainer.classList.remove('hidden');
+        progressText.classList.remove('hidden');
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
+        logsContainer.innerHTML = '';
+        outputFiles = [];
+      
+        const addLog = (message) => {
+            logsContainer.innerHTML += `<p class="break-words">> ${message}</p>`;
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        };
+
+        ffmpegInstance.setLogger(({ message }) => addLog(message));
+        ffmpegInstance.setProgress(({ ratio }) => {
+            const progress = Math.max(0, ratio * 100);
+            progressBar.style.width = `${progress}%`;
+            progressText.textContent = `${progress.toFixed(0)}%`;
+        });
+      
+        try {
+            const { name } = videoFile;
+            const extension = name.split('.').pop() || 'mp4';
+            const isAudio = audioOnlyCheckbox.checked;
+            const outputExtension = isAudio ? 'mp3' : extension;
+
+            addLog('Writing file to memory...');
+            ffmpegInstance.FS('writeFile', name, new Uint8Array(await videoFile.arrayBuffer()));
+            addLog('File written successfully.');
+
+            const args = [
+              '-i', name,
+              '-segment_time', String(segmentDuration),
+              '-f', 'segment',
+              '-reset_timestamps', '1'
+            ];
+
+            if (isAudio) {
+                args.push('-vn', '-c:a', 'libmp3lame', '-q:a', '2');
+            } else {
+                args.push('-c', 'copy', '-map', '0');
+            }
+            args.push(`output%03d.${outputExtension}`);
+
+            addLog(`Running FFmpeg with command: ffmpeg ${args.join(' ')}`);
+            await ffmpegInstance.run(...args);
+            addLog('Processing complete.');
+
+            const generatedFiles = [];
+            const files = ffmpegInstance.FS('readdir', '/');
+            const segmentFiles = files.filter(f => f.startsWith('output') && f.endsWith(outputExtension));
+        
+            addLog(`Found ${segmentFiles.length} output files.`);
+
+            for (const filename of segmentFiles) {
+              const data = ffmpegInstance.FS('readFile', filename);
+              const url = URL.createObjectURL(new Blob([data.buffer], { type: isAudio ? 'audio/mpeg' : videoFile.type }));
+              const friendlyName = filename.replace('output', 'segment_').replace(/(\d{3})/, match => `${parseInt(match, 10)}`);
+              generatedFiles.push({ name: friendlyName, url, type: isAudio ? 'audio' : 'video' });
+            }
+            outputFiles = generatedFiles;
+
+        } catch (error) {
+            addLog(`An error occurred: ${error}`);
+            console.error(error);
+        } finally {
+            isProcessing = false;
+            processingModal.classList.add('hidden');
+            updateUI();
+        }
+    };
+
+    const processWithWebApi = async () => {
+        if (!videoFile) return;
+
+        if (!videoFile.name.toLowerCase().endsWith('.mp4')) {
+            alert('The Web API tool currently only supports MP4 files. Please use FFmpeg for other formats.');
+            return;
+        }
+
+        const segmentDuration = parseInt(segmentMinutesInput.value || '0') * 60 + parseInt(segmentSecondsInput.value || '0');
+
+        isProcessing = true;
+        updateUI();
+
+        processingModal.classList.remove('hidden');
+        progressContainer.classList.add('hidden');
+        progressText.classList.add('hidden');
+        logsContainer.innerHTML = '';
+        outputFiles = [];
+
+        const addLog = (message) => {
+            logsContainer.innerHTML += `<p class="break-words">> ${message}</p>`;
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        };
+
+        try {
+            addLog('Using Web API (mp4box.js) for segmentation.');
+            addLog('Reading file into memory...');
+            const buffer = await videoFile.arrayBuffer();
+            buffer.fileStart = 0;
+
+            const mp4boxfile = MP4Box.createFile();
+            let generatedFiles = [];
+
+            await new Promise((resolve, reject) => {
+                mp4boxfile.onReady = (info) => {
+                    addLog('File metadata parsed.');
+                    const videoTrack = info.tracks.find(t => t.type === 'video');
+                    if (!videoTrack) {
+                        return reject(new Error('No video track found in the MP4 file.'));
+                    }
+                    
+                    addLog(`Video track found. Timescale: ${videoTrack.timescale}`);
+                    const segmentDurationInTrackScale = segmentDuration * videoTrack.timescale;
+                    mp4boxfile.setSegmentOptions(videoTrack.id, null, { duration: segmentDurationInTrackScale });
+                    addLog(`Segmentation options set for duration: ${segmentDuration} seconds.`);
+
+                    let segmentIndex = 0;
+                    mp4boxfile.onSegment = (id, user, buffer, sampleNum, is_last) => {
+                        segmentIndex++;
+                        addLog(`Received segment ${segmentIndex}. Size: ${buffer.byteLength} bytes.`);
+                        const blob = new Blob([buffer], { type: 'video/mp4' });
+                        const url = URL.createObjectURL(blob);
+                        const friendlyName = `segment_${String(segmentIndex).padStart(3, '0')}.mp4`;
+                        generatedFiles.push({ name: friendlyName, url, type: 'video' });
+
+                        if (is_last) {
+                            addLog('All segments received.');
+                            outputFiles = generatedFiles;
+                            resolve();
+                        }
+                    };
+                    addLog('Starting segmentation process...');
+                    mp4boxfile.start();
+                };
+                mp4boxfile.onError = (e) => reject(new Error(e));
+                addLog('Appending buffer to mp4box...');
+                mp4boxfile.appendBuffer(buffer);
+                mp4boxfile.flush();
+            });
+        } catch (error) {
+            addLog(`An error occurred: ${error.message}`);
+            console.error(error);
+        } finally {
+            isProcessing = false;
+            processingModal.classList.add('hidden');
+            updateUI();
+        }
+    };
+    
+    const handleProcessVideo = () => {
+        const segmentDuration = parseInt(segmentMinutesInput.value || '0') * 60 + parseInt(segmentSecondsInput.value || '0');
+        if (segmentDuration <= 0) {
+            alert("Segment duration must be greater than 0 seconds.");
+            return;
+        }
+
+        const selectedTool = toolSelect.value;
+        if (selectedTool === 'ffmpeg') {
+            processWithFFmpeg();
+        } else {
+            processWithWebApi();
+        }
     };
     
     // --- Event Listeners ---
-    dropZone.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.add('border-indigo-500', 'bg-gray-800');
-    });
-    dropZone.addEventListener('dragleave', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove('border-indigo-500', 'bg-gray-800');
-    });
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
+    dropZone.addEventListener('dragenter', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('border-indigo-500', 'bg-gray-800'); });
+    dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('border-indigo-500', 'bg-gray-800'); });
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -384,9 +479,23 @@
       outputFiles = [];
       updateUI();
     });
+    toolSelect.addEventListener('change', () => {
+        const isWebApi = toolSelect.value === 'web-api';
+        audioOnlyCheckbox.disabled = isWebApi;
+        if (isWebApi) {
+            audioOnlyCheckbox.checked = false;
+        }
+        const label = audioOnlyCheckbox.nextElementSibling;
+        if (isWebApi) {
+            label.classList.add('text-gray-500', 'cursor-not-allowed');
+        } else {
+            label.classList.remove('text-gray-500', 'cursor-not-allowed');
+        }
+        updateUI();
+    });
 
     [segmentMinutesInput, segmentSecondsInput, audioOnlyCheckbox].forEach(input => {
-        input.addEventListener('change', updateUI);
+        input.addEventListener('input', updateUI);
     });
 
     // --- Initialization ---
