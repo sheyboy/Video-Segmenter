@@ -1,25 +1,401 @@
-
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>On-Device Video Segmenter</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.1.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
-    "react/": "https://aistudiocdn.com/react@^19.1.1/"
-  }
-}
-</script>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>On-Device Video Segmenter</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Simple animation for the progress bar */
+    @keyframes progress-animation {
+      from { width: 0%; }
+    }
+    .progress-bar-animated {
+      animation: progress-animation 0.5s ease-out;
+    }
+  </style>
 </head>
-  <body class="bg-gray-900 text-white antialiased">
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+<body class="bg-gray-900 text-white antialiased">
+  <div class="min-h-screen flex flex-col items-center p-4 sm:p-6 lg:p-8">
+    
+    <!-- Processing Modal -->
+    <div id="processing-modal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4 hidden">
+      <div class="bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <h2 class="text-2xl font-bold mb-4 text-indigo-400">Processing Video...</h2>
+        <p class="text-gray-300 mb-2">Please wait, this may take a few moments. Do not close this window.</p>
+        <div class="w-full bg-gray-700 rounded-full h-4 mb-4 overflow-hidden">
+          <div id="progress-bar" class="bg-indigo-600 h-4 rounded-full transition-all duration-300 ease-linear" style="width: 0%;"></div>
+        </div>
+        <p id="progress-text" class="text-right text-lg font-mono text-indigo-300 mb-4">0%</p>
+        <div class="flex-grow bg-black rounded-md p-4 overflow-y-auto border border-gray-700">
+          <h3 class="text-sm font-semibold text-gray-400 mb-2">FFmpeg Logs:</h3>
+          <div id="logs-container" class="font-mono text-xs text-green-400 whitespace-pre-wrap"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="w-full max-w-4xl mx-auto">
+      <header class="text-center mb-8">
+        <h1 class="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-500">
+          On-Device Video Segmenter
+        </h1>
+        <p class="mt-2 text-lg text-gray-400">
+          Cut videos or extract audio directly in your browser.
+        </p>
+      </header>
+
+      <main class="space-y-6">
+        <div class="p-6 bg-gray-800/50 rounded-lg border border-gray-700 space-y-4">
+          <h2 class="text-xl font-semibold text-gray-200">1. Upload Video</h2>
+          
+          <!-- File Uploader -->
+          <div id="uploader-container">
+            <div id="drop-zone" class="relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-lg cursor-pointer transition-colors duration-200 border-gray-600 hover:border-gray-500 bg-gray-800/50">
+              <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-10 h-10 mb-4 text-gray-400"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"></path></svg>
+                <p class="mb-2 text-sm text-gray-400"><span class="font-semibold text-indigo-400">Click to upload</span> or drag and drop</p>
+                <p class="text-xs text-gray-500">MP4, MOV, WebM or other video formats</p>
+              </div>
+              <input id="file-input" type="file" accept="video/*" class="hidden">
+            </div>
+          </div>
+          
+          <!-- Video Preview -->
+          <div id="video-preview-container" class="hidden relative group bg-black rounded-lg overflow-hidden shadow-lg">
+            <video id="video-preview" controls class="w-full h-auto max-h-96"></video>
+            <div class="absolute top-0 right-0 m-2 flex items-center bg-black/50 p-2 rounded-lg backdrop-blur-sm">
+              <p id="video-info" class="text-sm font-mono mr-4 text-white"></p>
+              <button id="remove-file-btn" class="text-white hover:text-red-500 transition-colors duration-200" title="Remove video">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7"><path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"></path></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Options -->
+        <div id="options-container" class="hidden p-6 bg-gray-800/50 rounded-lg border border-gray-700 space-y-4">
+          <h2 class="text-xl font-semibold text-gray-200">2. Set Options</h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="block text-sm font-medium text-gray-300 mb-2">Segment Length</label>
+              <div class="flex items-center space-x-2">
+                <input id="segment-minutes" type="number" min="0" value="1" class="w-full bg-gray-700 text-white rounded-md p-2 border border-gray-600 focus:ring-indigo-500 focus:border-indigo-500">
+                <span class="text-gray-400">min</span>
+                <input id="segment-seconds" type="number" min="0" max="59" value="0" class="w-full bg-gray-700 text-white rounded-md p-2 border border-gray-600 focus:ring-indigo-500 focus:border-indigo-500">
+                <span class="text-gray-400">sec</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-start md:mt-8">
+               <div class="flex items-center">
+                <input id="audio-only" type="checkbox" class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 bg-gray-700">
+                <label for="audio-only" class="ml-3 block text-sm font-medium text-gray-300">
+                  Export Audio Only (.mp3)
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Process Button -->
+        <div class="flex flex-col items-center">
+           <button id="process-btn" class="px-8 py-3 w-full md:w-auto text-lg font-bold text-white bg-indigo-600 rounded-md shadow-lg transition-all duration-300 ease-in-out hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed disabled:shadow-none focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-indigo-500">
+             Loading Engine...
+           </button>
+           <p id="total-duration-text" class="mt-3 text-sm text-gray-500"></p>
+        </div>
+
+        <!-- Results -->
+        <div id="results-container" class="hidden w-full mt-8 p-6 bg-gray-800/50 rounded-lg border border-gray-700">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-indigo-400">Results</h2>
+            <button id="clear-results-btn" class="text-sm text-gray-400 hover:text-white transition-colors">
+              Clear Results
+            </button>
+          </div>
+          <div id="results-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
+        </div>
+      </main>
+      <footer class="text-center mt-12 text-gray-500 text-sm">
+          <p>Powered by ffmpeg.wasm. All processing is done on your device.</p>
+      </footer>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+  <script>
+    const { createFFmpeg } = FFmpeg;
+    let ffmpegInstance = null;
+
+    // --- DOM Elements ---
+    const uploaderContainer = document.getElementById('uploader-container');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const videoPreviewContainer = document.getElementById('video-preview-container');
+    const videoPreview = document.getElementById('video-preview');
+    const videoInfo = document.getElementById('video-info');
+    const removeFileBtn = document.getElementById('remove-file-btn');
+    const optionsContainer = document.getElementById('options-container');
+    const processBtn = document.getElementById('process-btn');
+    const totalDurationText = document.getElementById('total-duration-text');
+    const resultsContainer = document.getElementById('results-container');
+    const resultsGrid = document.getElementById('results-grid');
+    const clearResultsBtn = document.getElementById('clear-results-btn');
+    const processingModal = document.getElementById('processing-modal');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const logsContainer = document.getElementById('logs-container');
+    const segmentMinutesInput = document.getElementById('segment-minutes');
+    const segmentSecondsInput = document.getElementById('segment-seconds');
+    const audioOnlyCheckbox = document.getElementById('audio-only');
+
+    // --- State ---
+    let videoFile = null;
+    let videoDuration = 0;
+    let isProcessing = false;
+    let isFFmpegLoaded = false;
+    let outputFiles = [];
+
+    // --- Utils ---
+    const formatTime = (seconds) => {
+      if (isNaN(seconds) || seconds < 0) return '00:00';
+      const minutes = Math.floor(seconds / 60);
+      const remainingSeconds = Math.floor(seconds % 60);
+      return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+    };
+
+    // --- UI Update Function ---
+    const updateUI = () => {
+      // Uploader vs. Preview
+      if (videoFile) {
+        uploaderContainer.classList.add('hidden');
+        videoPreviewContainer.classList.remove('hidden');
+        optionsContainer.classList.remove('hidden');
+        totalDurationText.classList.remove('hidden');
+        videoInfo.textContent = `${videoFile.name} (${formatTime(videoDuration)})`;
+        totalDurationText.textContent = `Total video length: ${formatTime(videoDuration)}`;
+      } else {
+        uploaderContainer.classList.remove('hidden');
+        videoPreviewContainer.classList.add('hidden');
+        optionsContainer.classList.add('hidden');
+        totalDurationText.classList.add('hidden');
+        resultsContainer.classList.add('hidden');
+        outputFiles = [];
+      }
+
+      // Process Button State
+      const segmentMinutes = parseInt(segmentMinutesInput.value || '0', 10);
+      const segmentSeconds = parseInt(segmentSecondsInput.value || '0', 10);
+      const isDurationValid = segmentMinutes > 0 || segmentSeconds > 0;
+
+      processBtn.disabled = !videoFile || isProcessing || !isFFmpegLoaded || !isDurationValid;
+      if (isProcessing) {
+        processBtn.textContent = 'Processing...';
+      } else if (!isFFmpegLoaded) {
+        processBtn.textContent = 'Loading Engine...';
+      } else {
+        processBtn.textContent = 'Process and Split Video';
+      }
+
+      // Results
+      if (outputFiles.length > 0) {
+        resultsContainer.classList.remove('hidden');
+        renderResults();
+      } else {
+        resultsContainer.classList.add('hidden');
+      }
+    };
+    
+    const renderResults = () => {
+      resultsGrid.innerHTML = '';
+      outputFiles.forEach(file => {
+        const isVideo = file.type === 'video';
+        const icon = isVideo 
+          ? `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-indigo-400 mr-3"><path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9A2.25 2.25 0 0 0 13.5 5.25h-9A2.25 2.25 0 0 0 2.25 7.5v9A2.25 2.25 0 0 0 4.5 18.75Z"></path></svg>`
+          : `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-teal-400 mr-3"><path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9c0 .531-.023 1.054-.068 1.573M9 9c-1.353 0-2.653.2-3.868.573M9 15v4.5M9 15c0-.531.023-1.054.068-1.573M9 15c1.353 0 2.653-.2 3.868-.573m-3.868.573c-1.215.373-2.515.573-3.868.573M6.032 7.427C4.817 8.001 3.75 8.962 3.75 10.173c0 1.211 1.067 2.172 2.282 2.747m6.204-5.494c1.215-.575 2.282-1.536 2.282-2.747 0-1.211-1.067-2.172-2.282-2.747m-6.204 5.494v-5.494"></path></svg>`;
+        
+        const card = `
+          <div class="bg-gray-700 rounded-lg p-4 flex flex-col justify-between shadow-md">
+            <div class="flex items-center mb-3">
+              ${icon}
+              <p class="text-sm font-medium text-gray-200 break-all">${file.name}</p>
+            </div>
+            <a href="${file.url}" download="${file.name}" class="w-full mt-2 inline-flex items-center justify-center px-4 py-2 bg-indigo-600 text-white font-semibold rounded-md hover:bg-indigo-700 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-indigo-500">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 mr-2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg>
+              Download
+            </a>
+          </div>`;
+        resultsGrid.innerHTML += card;
+      });
+    };
+
+    // --- File Handling ---
+    const handleFileSelect = (file) => {
+      if (file && file.type.startsWith('video/')) {
+        videoFile = file;
+        videoPreview.src = URL.createObjectURL(file);
+        videoPreview.onloadedmetadata = () => {
+          videoDuration = videoPreview.duration;
+          updateUI();
+        };
+        outputFiles = []; // Clear previous results
+      } else {
+        alert('Please upload a valid video file.');
+        videoFile = null;
+      }
+      updateUI();
+    };
+
+    const removeFile = () => {
+      videoFile = null;
+      videoDuration = 0;
+      fileInput.value = "";
+      videoPreview.src = "";
+      updateUI();
+    };
+
+    // --- FFmpeg Logic ---
+    const loadFFmpeg = async () => {
+      ffmpegInstance = createFFmpeg({
+        log: false, // We will handle logs manually
+        corePath: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      });
+      await ffmpegInstance.load();
+      isFFmpegLoaded = true;
+      updateUI();
+    };
+
+    const handleProcessVideo = async () => {
+      if (!videoFile || !ffmpegInstance) return;
+
+      const segmentDuration = parseInt(segmentMinutesInput.value || '0') * 60 + parseInt(segmentSecondsInput.value || '0');
+      if (segmentDuration <= 0) {
+        alert("Segment duration must be greater than 0 seconds.");
+        return;
+      }
+
+      isProcessing = true;
+      updateUI();
+
+      // Show modal and reset state
+      processingModal.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+      logsContainer.innerHTML = '';
+      outputFiles = [];
+      
+      const addLog = (message) => {
+        logsContainer.innerHTML += `<p class="break-words">> ${message}</p>`;
+        logsContainer.scrollTop = logsContainer.scrollHeight;
+      };
+
+      ffmpegInstance.setLogger(({ message }) => addLog(message));
+      ffmpegInstance.setProgress(({ ratio }) => {
+        const progress = Math.max(0, ratio * 100);
+        progressBar.style.width = `${progress}%`;
+        progressText.textContent = `${progress.toFixed(0)}%`;
+      });
+      
+      try {
+        const { name } = videoFile;
+        const extension = name.split('.').pop() || 'mp4';
+        const isAudio = audioOnlyCheckbox.checked;
+        const outputExtension = isAudio ? 'mp3' : extension;
+
+        addLog('Writing file to memory...');
+        ffmpegInstance.FS('writeFile', name, new Uint8Array(await videoFile.arrayBuffer()));
+        addLog('File written successfully.');
+
+        const args = [
+          '-i', name,
+          '-segment_time', String(segmentDuration),
+          '-f', 'segment',
+          '-reset_timestamps', '1'
+        ];
+
+        if (isAudio) {
+            args.push('-vn', '-c:a', 'libmp3lame', '-q:a', '2');
+        } else {
+            args.push('-c', 'copy', '-map', '0');
+        }
+        args.push(`output%03d.${outputExtension}`);
+
+        addLog(`Running FFmpeg with command: ffmpeg ${args.join(' ')}`);
+        await ffmpegInstance.run(...args);
+        addLog('Processing complete.');
+
+        const generatedFiles = [];
+        const files = ffmpegInstance.FS('readdir', '/');
+        const segmentFiles = files.filter(f => f.startsWith('output') && f.endsWith(outputExtension));
+        
+        addLog(`Found ${segmentFiles.length} output files.`);
+
+        for (const filename of segmentFiles) {
+          const data = ffmpegInstance.FS('readFile', filename);
+          const url = URL.createObjectURL(new Blob([data.buffer], { type: isAudio ? 'audio/mpeg' : videoFile.type }));
+          const friendlyName = filename.replace('output', 'segment_').replace(/(\d{3})/, match => `${parseInt(match, 10)}`);
+          generatedFiles.push({ name: friendlyName, url, type: isAudio ? 'audio' : 'video' });
+        }
+        outputFiles = generatedFiles;
+
+      } catch (error) {
+        addLog(`An error occurred: ${error}`);
+        console.error(error);
+      } finally {
+        isProcessing = false;
+        processingModal.classList.add('hidden');
+        updateUI();
+      }
+    };
+    
+    // --- Event Listeners ---
+    dropZone.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('border-indigo-500', 'bg-gray-800');
+    });
+    dropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('border-indigo-500', 'bg-gray-800');
+    });
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('border-indigo-500', 'bg-gray-800');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFileSelect(e.dataTransfer.files[0]);
+        e.dataTransfer.clearData();
+      }
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+    removeFileBtn.addEventListener('click', removeFile);
+    processBtn.addEventListener('click', handleProcessVideo);
+    clearResultsBtn.addEventListener('click', () => {
+      outputFiles = [];
+      updateUI();
+    });
+
+    [segmentMinutesInput, segmentSecondsInput, audioOnlyCheckbox].forEach(input => {
+        input.addEventListener('change', updateUI);
+    });
+
+    // --- Initialization ---
+    const init = () => {
+      updateUI();
+      loadFFmpeg();
+    };
+
+    init();
+  </script>
+</body>
 </html>
