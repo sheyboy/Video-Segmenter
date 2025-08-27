@@ -1,0 +1,5 @@
+{
+  "name": "On-Device Video Segmenter",
+  "description": "An on-device video processing tool to cut videos into specified lengths or extract audio. All processing happens locally in your browser using ffmpeg.wasm, ensuring privacy and speed.",
+  "requestFramePermissions": []
+}
